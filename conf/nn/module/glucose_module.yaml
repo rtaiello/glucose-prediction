@@ -1,0 +1,4 @@
+_target_: glucose_prediction.pl_modules.glucose_module.GlucoseModule
+defaults:
+  - _self_
+  - model: cnn_lstm

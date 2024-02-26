@@ -1,0 +1,6 @@
+# This class defines which dataset to use,
+# and also how to split in train/[val]/test.
+_target_: glucose_prediction.data.replace_bg_dataset.ReplaceBGDataset
+example_len: 16
+external_mean: [160.87544032,   0.21893523,   1.49783614]
+external_std : [63.60143682,  1.14457581,  8.92042825]

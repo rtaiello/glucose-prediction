@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Mapping, Sequence, Tuple, Union
 
 import hydra
 import lightning.pytorch as pl
@@ -12,15 +12,14 @@ from torch.optim import Optimizer
 from nn_core.common import PROJECT_ROOT
 from nn_core.model_logging import NNLogger
 
-from glucose_prediction.data.datamodule import MetaData
-
 pylogger = logging.getLogger(__name__)
+torch.autograd.set_detect_anomaly(True)
 
 
-class MyLightningModule(pl.LightningModule):
+class GlucoseModule(pl.LightningModule):
     logger: NNLogger
 
-    def __init__(self, model, metadata: Optional[MetaData] = None, *args, **kwargs) -> None:
+    def __init__(self, model, *args, **kwargs) -> None:
         super().__init__()
 
         # Populate self.hparams with args and kwargs automagically!
@@ -28,18 +27,15 @@ class MyLightningModule(pl.LightningModule):
         # Be careful when modifying this instruction. If in doubt, don't do it :]
         self.save_hyperparameters(logger=False, ignore=("metadata",))
 
-        self.metadata = metadata
-
         # example
-        metric = torchmetrics.Accuracy(
-            task="multiclass",
-            num_classes=len(metadata.class_vocab) if metadata is not None else None,
-        )
-        self.train_acc = metric.clone()
-        self.val_acc = metric.clone()
-        self.test_acc = metric.clone()
+        metric = torchmetrics.MeanSquaredError(squared=False)
+        self.train_rmse = metric.clone()
+        self.val_rmse = metric.clone()
+        self.test_rmse = metric.clone()
 
-        self.model = hydra.utils.instantiate(model, num_classes=len(metadata.class_vocab))
+        self.model = hydra.utils.instantiate(model)
+        self.input_length = 12
+        self.pred_length = 4
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Method for the forward pass.
@@ -51,29 +47,29 @@ class MyLightningModule(pl.LightningModule):
             output_dict: forward output containing the predictions (output logits ecc...) and the loss if any.
         """
         # example
-        return self.model(x)
+        return self.model(x, self.input_length)
 
     def _step(self, batch: Dict[str, torch.Tensor], split: str) -> Mapping[str, Any]:
-        x = batch[self.hparams.x_key]
-        gt_y = batch[self.hparams.y_key]
+        x = batch
+        gt_y = batch[:, -self.pred_length :, 0] * 63.60143682 + 160.87544032
 
         # example
-        logits = self(x)
-        loss = F.cross_entropy(logits, gt_y)
-        preds = torch.softmax(logits, dim=-1)
+        hat_y = self(x)[:, -self.pred_length :, 0] * 63.60143682 + 160.87544032
+        loss = F.l1_loss(hat_y, gt_y)
 
-        metrics = getattr(self, f"{split}_acc")
-        metrics.update(preds, gt_y)
+        metrics = getattr(self, f"{split}_rmse")
+        metrics.update(hat_y.clone().detach(), gt_y.clone().detach())
 
         self.log_dict(
             {
-                f"acc/{split}": metrics,
+                f"rmse/{split}": metrics,
                 f"loss/{split}": loss,
             },
+            prog_bar=True,
             on_epoch=True,
         )
 
-        return {"logits": logits.detach(), "loss": loss}
+        return {"loss": loss}
 
     def training_step(self, batch: Any, batch_idx: int) -> Mapping[str, Any]:
         return self._step(batch=batch, split="train")
@@ -108,15 +104,15 @@ class MyLightningModule(pl.LightningModule):
         return [opt], [scheduler]
 
 
-@hydra.main(config_path=str(PROJECT_ROOT / "conf"), config_name="default")
+@hydra.main(config_path=str(PROJECT_ROOT / "conf"), config_name="default", version_base="1.3.2")
 def main(cfg: omegaconf.DictConfig) -> None:
     """Debug main to quickly develop the Lightning Module.
 
     Args:
         cfg: the hydra configuration
     """
-    m: pl.LightningDataModule = hydra.utils.instantiate(cfg.nn.data, _recursive_=False)
-    _: pl.LightningModule = hydra.utils.instantiate(cfg.nn.module, _recursive_=False, metadata=m.metadata)
+    _: pl.LightningDataModule = hydra.utils.instantiate(cfg.nn.data, _recursive_=False)
+    _: pl.LightningModule = hydra.utils.instantiate(cfg.nn.module, _recursive_=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+_target_: glucose_prediction.data.glucose_datamodule.GlucoseDataModule
+
+accelerator: ${train.trainer.accelerator}
+
+num_workers:
+  train: 4
+  val: 2
+  test: 0
+
+batch_size:
+  train: 32
+  val: 32
+  test: 512
+
+defaults:
+  - _self_
+  - dataset: csv/replace_bg # pick one of the yamls in nn/data/

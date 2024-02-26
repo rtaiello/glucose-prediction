@@ -1,0 +1,3 @@
+_target_: glucose_prediction.modules.cnn_lstm.CNN_LSTM
+d_in: 3
+single_pred: True

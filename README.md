@@ -7,8 +7,8 @@
 </p>
 
 Glucose Prediction using [Replace-BG Dataset](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5864100/pdf/dc162482.pdf) <br>
-Preprocessing insperid by [Long-Term Prediction of Blood Glucose
-- Levels in Type 1 Diabetes Using a CNNLSTM-Based Deep Neural Network](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10658677/pdf/10.1177_19322968221092785.pdf)
+- Preprocessing insperid by [Long-Term Prediction of Blood Glucose
+ Levels in Type 1 Diabetes Using a CNNLSTM-Based Deep Neural Network](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10658677/pdf/10.1177_19322968221092785.pdf)
 - Code insperid by [GluPred Github Repository](https://github.com/r-cui/GluPred)
 
 ## Installation
