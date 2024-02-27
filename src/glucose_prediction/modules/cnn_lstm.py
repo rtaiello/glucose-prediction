@@ -14,19 +14,14 @@ class CNN_LSTM(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv1d(in_channels=3, out_channels=32, kernel_size=7, padding=3),
             nn.ReLU(),
-            # nn.BatchNorm1d(32),
             nn.Conv1d(in_channels=32, out_channels=64, kernel_size=7, padding=3),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=1),
-            # nn.BatchNorm1d(64),
             nn.Conv1d(in_channels=64, out_channels=64, kernel_size=5),
             nn.ReLU(),
-            # nn.BatchNorm1d(64),
             nn.Conv1d(in_channels=64, out_channels=128, kernel_size=5),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=1),
-            # nn.BatchNorm1d(128),
-            # nn.Flatten()
         )
 
         self.lstm = nn.LSTM(input_size=128, hidden_size=100, num_layers=2, batch_first=True, dropout=0.2)

@@ -44,8 +44,8 @@ class GlucoseDataModule(pl.LightningDataModule):
         data_dir = f"{PROJECT_ROOT}/data/raw/patients"
 
         patients = os.listdir(data_dir)
-
-        patients = [int(p.replace(".csv", "")) for p in patients]
+        # remove .gitingore from patients
+        patients = [int(p.replace(".csv", "")) for p in patients if ".csv" in p]
         # 70% of patients for training random idx
         patients_training = np.random.choice(patients, int(len(patients) * 0.7), replace=False)
         # 10% of patients for validation of the remaining patients
