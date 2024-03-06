@@ -20,7 +20,9 @@ pip install git+ssh://git@github.com/rtaiello/glucose-prediction.git
 
 ## Quickstart
 
-Soon available
+- Download `REPLACE-BG-Dataset.zip` from this [link](https://public.jaeb.org/datasets/diabetes);
+- `unzip` it and move `HDeviceBolus.txt`, `HDeviceCGM.txt` and `HDeviceWizard.txt` to `data/original` folder;
+- Run preprocessing notebook, [preprocessing.ipynb](https://github.com/rtaiello/glucose-prediction/blob/main/src/glucose_prediction/preprocessing.ipynb)
 
 ## Development installation
 
