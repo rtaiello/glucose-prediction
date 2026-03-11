@@ -1,48 +1,65 @@
-"""
+"""Replace-BG dataset loader.
+
 Code inspired by https://github.com/r-cui/GluPred/tree/master
 """
 
 import datetime
+import logging
+from typing import List, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+pylogger = logging.getLogger(__name__)
+
+# CGM readings are sampled every 15 minutes
+INTERVAL_MINUTES = 15
+
 
 class ReplaceBGDataset(Dataset):
-    """The Replace-BG dataset for Torch training."""
+    """Sliding-window dataset over a single patient's time-series.
 
-    def __init__(self, raw_df, example_len, external_mean=None, external_std=None, unimodal=False):
-        """
-        Args
-            raw_df: dataframe
-            example_len: int
-            external_mean: [float]
-                If none, self fit.
-            external_std: [float]
-                If none, self fit.
-            unimodal: bool
-                If True, data contains glucose only
-        """
+    Each sample is a ``(example_len, 3)`` tensor with z-normalized
+    [glucose, bolus, carbs] values.
+    """
+
+    def __init__(
+        self,
+        raw_df: pd.DataFrame,
+        example_len: int,
+        external_mean: List[float],
+        external_std: List[float],
+        unimodal: bool = False,
+    ) -> None:
         raw_df.replace(to_replace=-1, value=np.nan, inplace=True)
         self.example_len = example_len
         self.unimodal = unimodal
-        self.data, self.times = self._initial(raw_df)  # (len, n_features)
-        self.example_indices = self._example_indices(self.times)
-        self._standardise(external_mean, external_std)
-        print("Dataset loaded, total examples: {}.".format(len(self)))
 
-        # post check
+        self.data, self.times = self._parse_features(raw_df)
+        self.example_indices = self._extract_windows(self.times)
+        self._standardise(external_mean, external_std)
+
+        pylogger.info(f"Dataset loaded, total examples: {len(self)}")
+
+        # Sanity check: no NaN should survive after standardisation
         for i in range(len(self)):
             if torch.isnan(self[i]).any():
                 raise ValueError("NaN detected in dataset!")
 
     @staticmethod
-    def str2dt(s):
+    def _str2dt(s: str) -> datetime.datetime:
         return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
 
-    def _initial(self, raw_df):
-        times = [self.str2dt(s) for s in raw_df["time"]]
+    def _parse_features(self, raw_df: pd.DataFrame) -> Tuple[np.ndarray, List[datetime.datetime]]:
+        """Extract feature columns and timestamps from the raw dataframe.
+
+        Returns:
+            data: (N_rows, 3) float32 array [glucose, bolus, carbs].
+            times: list of datetime objects aligned with data rows.
+        """
+        times = [self._str2dt(s) for s in raw_df["time"]]
         glucose = raw_df["GlucoseValue"].to_numpy(dtype=np.float32)
         bolus = raw_df["Normal"].to_numpy(dtype=np.float32)
         carbs = raw_df["CarbInput"].to_numpy(dtype=np.float32)
@@ -50,79 +67,57 @@ class ReplaceBGDataset(Dataset):
         bolus[np.isnan(bolus)] = 0.0
         carbs[np.isnan(carbs)] = 0.0
 
-        return (
-            np.array(
-                [
-                    glucose,
-                    bolus,
-                    carbs,
-                ],
-                dtype=np.float32,
-            ).T,
-            times,
-        )
+        data = np.stack([glucose, bolus, carbs], axis=1)  # (N_rows, 3)
+        return data, times
 
-    def _example_indices(self, times):
-        """Extract every possible example from the dataset, st. all data entry in this example is not missing.
+    def _extract_windows(self, times: List[datetime.datetime]) -> List[Tuple[int, int]]:
+        """Find all valid sliding windows of length ``example_len``.
+
+        A window is valid when:
+        - No feature value is NaN within the window.
+        - The time span equals exactly ``example_len * 15`` minutes (no gaps).
 
         Returns:
-            [(start_row, end_row)]
-                Starting and ending indices for each possible example from this dataframe.
+            List of (start_row, end_row) inclusive index pairs.
         """
-        res = []
+        indices: List[Tuple[int, int]] = []
         total_len = self.data.shape[0]
+        max_gap = datetime.timedelta(minutes=self.example_len * INTERVAL_MINUTES)
 
-        def look_ahead(start):
+        def _scan_from(start: int) -> Tuple[List[Tuple[int, int]], int]:
             end = start
-            res = []
+            found: List[Tuple[int, int]] = []
             while end < total_len:
                 if np.any(np.isnan(self.data[end, :])):
                     break
                 if end - start + 1 >= self.example_len:
-                    # check that between start and end, there is the difference of self.example_len * 15 minutes
-                    gap_min = self.example_len * 15
-                    if (times[end] - times[end - self.example_len + 1]) <= datetime.timedelta(minutes=gap_min):
-                        res.append((end - self.example_len + 1, end))
+                    window_start = end - self.example_len + 1
+                    if (times[end] - times[window_start]) <= max_gap:
+                        found.append((window_start, end))
                 end += 1
-            return res, end
+            return found, end
 
         i = 0
         while i < total_len:
             if not np.any(np.isnan(self.data[i, :])):
-                temp_res, temp_end = look_ahead(i)
-                res += temp_res
-                i = temp_end + 1
+                windows, next_i = _scan_from(i)
+                indices.extend(windows)
+                i = next_i + 1
             else:
                 i += 1
-        return res
+        return indices
 
-    def _standardise(self, external_mean=None, external_std=None):
-        if external_mean is None and external_std is None:
-            mean = []
-            std = []
-            for i in range(self.data.shape[1]):
-                mean.append(np.nanmean(self.data[:, i]))
-                std.append(np.nanstd(self.data[:, i]))
-        else:
-            mean = external_mean
-            std = external_std
+    def _standardise(self, mean: List[float], std: List[float]) -> None:
+        """Apply z-normalization in-place using the provided statistics."""
         self.mean = mean
         self.std = std
-        print("Standardising with mean: {} and std: {}.".format(mean, std))
         for i in range(self.data.shape[1]):
             self.data[:, i] = (self.data[:, i] - mean[i]) / std[i]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.example_indices)
 
-    def __getitem__(self, idx):
-        """
-        Args:
-            idx: int
-        Returns:
-            (example_len, channels)
-        """
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """Return a single window as a ``(example_len, 3)`` float tensor."""
         start_row, end_row = self.example_indices[idx]
-        res = torch.from_numpy(self.data[start_row : end_row + 1, :])
-        # print(f"start_row: {self.times[start_row]}, end_row: {self.times[end_row +1]}")
-        return res
+        return torch.from_numpy(self.data[start_row : end_row + 1, :])

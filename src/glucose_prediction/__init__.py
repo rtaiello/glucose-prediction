@@ -1,6 +1,7 @@
 import logging
+from importlib.metadata import PackageNotFoundError, version
 
-from nn_core.console_logging import NNRichHandler
+from rich.logging import RichHandler
 
 # Required workaround because PyTorch Lightning configures the logging on import,
 # thus the logging configuration defined in the __init__.py must be called before
@@ -18,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        NNRichHandler(
+        RichHandler(
             rich_tracebacks=True,
             show_level=True,
             show_path=True,
@@ -29,12 +30,6 @@ logging.basicConfig(
 )
 
 try:
-    from ._version import __version__ as __version__
-except ImportError:
-    import sys
-
-    print(
-        "Project not installed in the current env, activate the correct env or install it with:\n\tpip install -e .",
-        file=sys.stderr,
-    )
+    __version__ = version("glucose-prediction")
+except PackageNotFoundError:
     __version__ = "unknown"

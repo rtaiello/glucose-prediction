@@ -1,4 +1,9 @@
 _target_: glucose_prediction.pl_modules.glucose_module.GlucoseModule
+
+# Prediction horizon in minutes (30, 60, 90, or 120).
+# At 15-min intervals: 30min=2 steps, 60min=4, 90min=6, 120min=8.
+pred_horizon_minutes: 60
+
 defaults:
   - _self_
   - model: cnn_lstm
