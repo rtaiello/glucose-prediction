@@ -1,0 +1,18 @@
+{
+  "config": {
+    "n_train": 180,
+    "n_rounds": 50,
+    "local_steps": 100,
+    "total_steps": 5000,
+    "client_fraction": 0.1,
+    "seed": 42,
+    "device": "cuda:0",
+    "batch_size": 32,
+    "lr": 0.001
+  },
+  "results": {
+    "mae": 15.806612014770508,
+    "rmse": 23.847681045532227,
+    "total_steps": 90000
+  }
+}
