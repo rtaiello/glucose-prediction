@@ -22,15 +22,18 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = str(PROJECT_ROOT / "data" / "raw" / "patients")
 RESULTS_DIR = str(PROJECT_ROOT / "results" / "federated")
+MODELS_DIR = str(PROJECT_ROOT / "results" / "federated" / "models")
 
 INPUT_LENGTH = 12
 PRED_LENGTH = 4
@@ -91,23 +94,35 @@ def _print_header(args):
     print(f"{'='*60}\n")
 
 
+def _save_norm_stats(global_mean, global_std) -> None:
+    """Save normalization stats alongside models so they can be loaded later."""
+    path = Path(MODELS_DIR) / "norm_stats.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mean": global_mean, "std": global_std}, indent=2))
+
+
 def run_local(args, train_ids, test_ids, global_mean, global_std) -> dict:
     from glucose_prediction.federated.evaluate import evaluate_local_baseline
 
     total_steps = args.n_rounds * args.local_steps
+    model_save_dir = str(Path(MODELS_DIR) / "local")
     print(f"Phase: Local Baseline  ({total_steps} steps per patient)")
-    local_mae, local_rmse, per_patient = evaluate_local_baseline(
+    local_mae, local_rmse, local_r2, zone_metrics, per_patient = evaluate_local_baseline(
         train_ids=train_ids, test_ids=test_ids, data_dir=DATA_DIR,
         global_mean=global_mean, global_std=global_std,
         total_steps=total_steps, example_len=EXAMPLE_LEN,
         input_length=INPUT_LENGTH, pred_length=PRED_LENGTH,
         batch_size=args.batch_size, lr=args.lr, device=torch.device(args.device),
+        model_save_dir=model_save_dir,
     )
-    print(f"\nLocal baseline  →  MAE: {local_mae:.3f} mg/dL | RMSE: {local_rmse:.3f} mg/dL\n")
+    print(f"\nLocal baseline  →  MAE: {local_mae:.3f} mg/dL | RMSE: {local_rmse:.3f} mg/dL | R²: {local_r2:.4f}")
+    print(f"  Zone recall    →  Hypo: {zone_metrics.hypo_recall:.1%} | Normal: {zone_metrics.normal_recall:.1%} | Hyper: {zone_metrics.hyper_recall:.1%}\n")
+    print(f"  Models saved   →  {model_save_dir}/patient_{{pid}}.pt")
     return {
-        "mae": local_mae, "rmse": local_rmse, "n_patients": len(per_patient),
+        "mae": local_mae, "rmse": local_rmse, "r2": local_r2, "n_patients": len(per_patient),
+        "zone_metrics": dataclasses.asdict(zone_metrics),
         "per_patient": [
-            {"patient_id": r.patient_id, "mae": r.mae, "rmse": r.rmse, "n_windows": r.n_windows}
+            {"patient_id": r.patient_id, "mae": r.mae, "rmse": r.rmse, "r2": r.r2, "n_windows": r.n_windows}
             for r in per_patient
         ],
     }
@@ -116,20 +131,22 @@ def run_local(args, train_ids, test_ids, global_mean, global_std) -> dict:
 def run_centralized(args, train_ids, test_ids, global_mean, global_std) -> dict:
     from glucose_prediction.federated.evaluate import evaluate_centralized
 
-    # Fair compute budget: match total FL gradient steps across all selected clients × all rounds.
-    # FL total steps = n_rounds × n_selected_per_round × local_steps
     n_selected = max(1, int(args.n_train * args.client_fraction))
     total_steps = args.n_rounds * n_selected * args.local_steps
+    model_save_path = str(Path(MODELS_DIR) / "centralized.pt")
     print(f"Phase: Centralized  ({total_steps} steps = {args.n_rounds} rounds × {n_selected} clients × {args.local_steps} steps)")
-    cent_mae, cent_rmse = evaluate_centralized(
+    cent_mae, cent_rmse, cent_r2, zone_metrics = evaluate_centralized(
         train_ids=train_ids, test_ids=test_ids, data_dir=DATA_DIR,
         global_mean=global_mean, global_std=global_std,
         total_steps=total_steps, example_len=EXAMPLE_LEN,
         input_length=INPUT_LENGTH, pred_length=PRED_LENGTH,
         batch_size=args.batch_size, lr=args.lr, device=torch.device(args.device),
+        model_save_path=model_save_path,
     )
-    print(f"\nCentralized     →  MAE: {cent_mae:.3f} mg/dL | RMSE: {cent_rmse:.3f} mg/dL\n")
-    return {"mae": cent_mae, "rmse": cent_rmse, "total_steps": total_steps}
+    print(f"\nCentralized     →  MAE: {cent_mae:.3f} mg/dL | RMSE: {cent_rmse:.3f} mg/dL | R²: {cent_r2:.4f}")
+    print(f"  Zone recall    →  Hypo: {zone_metrics.hypo_recall:.1%} | Normal: {zone_metrics.normal_recall:.1%} | Hyper: {zone_metrics.hyper_recall:.1%}")
+    print(f"  Model saved    →  {model_save_path}\n")
+    return {"mae": cent_mae, "rmse": cent_rmse, "r2": cent_r2, "total_steps": total_steps, "zone_metrics": dataclasses.asdict(zone_metrics)}
 
 
 def run_fedavg(args, train_ids, test_ids, global_mean, global_std) -> dict:
@@ -139,6 +156,7 @@ def run_fedavg(args, train_ids, test_ids, global_mean, global_std) -> dict:
     from glucose_prediction.federated.server import FederatedServer
 
     device = torch.device(args.device)
+    model_save_path = Path(MODELS_DIR) / "fedavg.pt"
     print(f"Phase: FedAvg  ({args.n_rounds} rounds × {args.local_steps} steps, fraction={args.client_fraction})")
 
     clients = []
@@ -161,14 +179,20 @@ def run_fedavg(args, train_ids, test_ids, global_mean, global_std) -> dict:
         client_fraction=args.client_fraction, verbose=True,
     )
 
-    fed_mae, fed_rmse = evaluate_federated(
+    # Save global model
+    model_save_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(server.global_model.state_dict(), model_save_path)
+
+    fed_mae, fed_rmse, fed_r2, zone_metrics = evaluate_federated(
         global_model=server.global_model, test_ids=test_ids, data_dir=DATA_DIR,
         global_mean=global_mean, global_std=global_std, example_len=EXAMPLE_LEN,
         input_length=INPUT_LENGTH, pred_length=PRED_LENGTH,
         batch_size=args.batch_size, device=device,
     )
-    print(f"\nFedAvg          →  MAE: {fed_mae:.3f} mg/dL | RMSE: {fed_rmse:.3f} mg/dL\n")
-    return {"mae": fed_mae, "rmse": fed_rmse, "round_history": server.round_history}
+    print(f"\nFedAvg          →  MAE: {fed_mae:.3f} mg/dL | RMSE: {fed_rmse:.3f} mg/dL | R²: {fed_r2:.4f}")
+    print(f"  Zone recall    →  Hypo: {zone_metrics.hypo_recall:.1%} | Normal: {zone_metrics.normal_recall:.1%} | Hyper: {zone_metrics.hyper_recall:.1%}")
+    print(f"  Model saved    →  {model_save_path}\n")
+    return {"mae": fed_mae, "rmse": fed_rmse, "r2": fed_r2, "round_history": server.round_history, "zone_metrics": dataclasses.asdict(zone_metrics)}
 
 
 def _save_phase(phase_name: str, data: dict, args) -> None:
@@ -196,13 +220,30 @@ def _load_phase(phase_name: str) -> dict:
 
 
 def run_report(args) -> None:
+    from glucose_prediction.federated.evaluate import ZoneMetrics
     from glucose_prediction.federated.results import print_comparison_table, save_comparison_plot, save_results_json
 
     local = _load_phase("local")
     cent = _load_phase("centralized")
     fed = _load_phase("fedavg")
 
-    print_comparison_table(local["mae"], local["rmse"], cent["mae"], cent["rmse"], fed["mae"], fed["rmse"])
+    def _zones(phase_data: dict) -> Optional[ZoneMetrics]:
+        zm = phase_data.get("zone_metrics")
+        return ZoneMetrics(**zm) if zm is not None else None
+
+    local_zones = _zones(local)
+    cent_zones = _zones(cent)
+    fed_zones = _zones(fed)
+
+    print_comparison_table(
+        local["mae"], local["rmse"], local.get("r2"),
+        cent["mae"], cent["rmse"], cent.get("r2"),
+        fed["mae"], fed["rmse"], fed.get("r2"),
+        local_zones=local_zones, cent_zones=cent_zones, fed_zones=fed_zones,
+    )
+
+    if local_zones is None:
+        print("\n[Note] Zone metrics not available — re-run all phases with the updated code to include them.")
 
     combined = {
         "config": {
@@ -216,8 +257,12 @@ def run_report(args) -> None:
     }
     save_results_json(combined, RESULTS_DIR)
     save_comparison_plot(
-        local["mae"], local["rmse"], cent["mae"], cent["rmse"],
-        fed["mae"], fed["rmse"], fed.get("round_history", []), RESULTS_DIR,
+        local["mae"], local["rmse"], local.get("r2"),
+        cent["mae"], cent["rmse"], cent.get("r2"),
+        fed["mae"], fed["rmse"], fed.get("r2"),
+        RESULTS_DIR,
+        local_zones=local_zones, cent_zones=cent_zones, fed_zones=fed_zones,
+        per_patient_results=local.get("per_patient"),
     )
 
 
@@ -234,14 +279,17 @@ def main() -> None:
     if args.phase == "local":
         data = run_local(args, train_ids, test_ids, global_mean, global_std)
         _save_phase("local", data, args)
+        _save_norm_stats(global_mean, global_std)
 
     elif args.phase == "centralized":
         data = run_centralized(args, train_ids, test_ids, global_mean, global_std)
         _save_phase("centralized", data, args)
+        _save_norm_stats(global_mean, global_std)
 
     elif args.phase == "fedavg":
         data = run_fedavg(args, train_ids, test_ids, global_mean, global_std)
         _save_phase("fedavg", data, args)
+        _save_norm_stats(global_mean, global_std)
 
     elif args.phase == "all":
         local_data = run_local(args, train_ids, test_ids, global_mean, global_std)
@@ -250,6 +298,7 @@ def main() -> None:
         _save_phase("centralized", cent_data, args)
         fed_data = run_fedavg(args, train_ids, test_ids, global_mean, global_std)
         _save_phase("fedavg", fed_data, args)
+        _save_norm_stats(global_mean, global_std)
         run_report(args)
 
 

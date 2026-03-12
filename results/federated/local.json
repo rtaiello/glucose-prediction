@@ -5,9 +5,12 @@
     "local_steps": 20,
     "total_steps": 60,
     "client_fraction": 0.5,
-    "seed": 42
+    "seed": 42,
+    "device": "cuda:0",
+    "batch_size": 32,
+    "lr": 0.001
   },
-  "local_baseline": {
+  "results": {
     "mae": 35.126339721679685,
     "rmse": 46.42734718322754,
     "n_patients": 10,
@@ -82,37 +85,5 @@
         "n_windows": 17483
       }
     ]
-  },
-  "centralized": {
-    "mae": 24.214202880859375,
-    "rmse": 34.4154052734375,
-    "total_steps": 300,
-    "zone_metrics": {
-      "hypo_recall": 0.09858593611619532,
-      "normal_recall": 0.8654149313945072,
-      "hyper_recall": 0.8570634131370368,
-      "hypo_n": 406488,
-      "normal_n": 7480815,
-      "hyper_n": 3864357,
-      "overall_acc": 0.8361441702704129
-    }
-  },
-  "fedavg": {
-    "mae": 32.435699462890625,
-    "rmse": 43.318641662597656,
-    "round_history": [
-      47.600828609466554,
-      37.0731162071228,
-      33.47264762878418
-    ],
-    "zone_metrics": {
-      "hypo_recall": 0.0,
-      "normal_recall": 0.8105832051721638,
-      "hyper_recall": 0.8448259309375402,
-      "hypo_n": 406488,
-      "normal_n": 7480815,
-      "hyper_n": 3864357,
-      "overall_acc": 0.7938054708866662
-    }
   }
 }
